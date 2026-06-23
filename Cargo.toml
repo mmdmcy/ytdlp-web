@@ -1,0 +1,23 @@
+[package]
+name = "ytdlp-web"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Private yt-dlp web queue for trusted local networks."
+
+[dependencies]
+axum = "0.8"
+argon2 = "0.5"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["clock", "serde"] }
+hex = "0.4"
+mime_guess = "2"
+rand = "0.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+subtle = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+url = "2"
+uuid = { version = "1", features = ["v4"] }
