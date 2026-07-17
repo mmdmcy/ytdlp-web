@@ -1,0 +1,40 @@
+schema_version = "linuxmice.component.v1"
+id = "katteke.ytdlp-web"
+display_name = "YTDLP Web"
+version = "0.1.0"
+summary = "Standalone web interface for media download workflows with optional shared identity."
+component_type = "application"
+standalone = true
+platforms = ["linux"]
+documentation = "https://docs.katteke.com/products/ytdlp-web/"
+
+[installation]
+package = "ytdlp-web"
+
+[capabilities]
+provides = ["app.ytdlp-web"]
+requires = []
+optional = ["identity.oidc"]
+
+[interfaces]
+mode = "loopback-http"
+commands = []
+endpoints = ["http://127.0.0.1:8790/.well-known/linuxmice/component"]
+
+[authentication]
+required = ["local-account"]
+optional = ["oidc"]
+provides = []
+
+[data]
+ownership = "YTDLP Web owns its jobs and settings; downloaded media stays operator-owned."
+backup_responsibility = "The YTDLP Web operator owns configuration backup and media retention."
+
+[health]
+kind = "http"
+read_only = true
+timeout_ms = 1500
+
+[health.http]
+url = "http://127.0.0.1:8790/.well-known/linuxmice/component"
+expected_status = 200
