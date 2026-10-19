@@ -40,11 +40,19 @@ YTDLP_WEB_DOWNLOAD_DIR=data/downloads
 YTDLP_WEB_YTDLP=yt-dlp
 YTDLP_WEB_MAX_ACTIVE=1
 YTDLP_WEB_JOB_TTL_HOURS=24
+YTDLP_WEB_DOWNLOAD_TIMEOUT_SECS=7200
 YTDLP_WEB_AUTH_DISABLED=0
 YTDLP_WEB_PASSWORD_HASH=<argon2 hash>
 YTDLP_WEB_COOKIE_SECRET=<stable random hex, at least 32 bytes>
 YTDLP_WEB_COOKIE_SECURE=0
 ```
+
+A `yt-dlp` run that is still going after `YTDLP_WEB_DOWNLOAD_TIMEOUT_SECS`
+(default two hours) is killed and the job fails, freeing its download slot.
+The process's stderr is drained while it runs and its last few KiB are shown
+in the job error. After five rejected passwords or Basic credentials from one
+client address within ten minutes, further attempts from that address are
+refused with `429` until the oldest failure is ten minutes old.
 
 Set `YTDLP_WEB_COOKIE_SECRET` explicitly whenever authentication is enabled.
 Keep the same deployment-managed value across restarts and all instances; a
@@ -63,7 +71,17 @@ YTDLP_WEB_OIDC_ISSUER=https://identity.example.invalid
 YTDLP_WEB_OIDC_CLIENT_ID=ytdlp-web
 YTDLP_WEB_OIDC_CLIENT_SECRET=<oidc client secret>
 YTDLP_WEB_OIDC_REDIRECT_URL=https://ytdlp-web.example.invalid/auth/oidc/callback
+YTDLP_WEB_OIDC_ALLOWED_SUBJECTS=<comma-separated sub claims>
+YTDLP_WEB_OIDC_ALLOWED_EMAILS=<comma-separated email claims>
 ```
+
+A verified ID token only creates a session when its `sub` is listed in
+`YTDLP_WEB_OIDC_ALLOWED_SUBJECTS` or its `email` (case-insensitive) is listed
+in `YTDLP_WEB_OIDC_ALLOWED_EMAILS`; other identities get `403` and a log line
+with the subject. When neither list is set, every identity the issuer vouches
+for is accepted and YTDLP Web prints a startup warning saying so. Email
+matching trusts the issuer's `email` claim, so prefer subjects where the
+provider allows users to change their address.
 
 The issuer and redirect URL must use HTTPS. Loopback HTTP is accepted only for
 explicit local dogfood testing. Discovered authorization, token, userinfo, and

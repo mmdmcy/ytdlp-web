@@ -12,6 +12,7 @@ pub(crate) async fn serve() -> io::Result<()> {
         config,
         jobs: std::sync::Mutex::new(HashMap::new()),
         download_slots: Semaphore::new(1),
+        login_limiter: Default::default(),
     });
     state.set_download_slots();
 
@@ -23,5 +24,9 @@ pub(crate) async fn serve() -> io::Result<()> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
     println!("YTDLP Web listening on http://{bind}");
-    axum::serve(listener, app).await
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
 }

@@ -47,6 +47,7 @@ async fn run_download_job(state: Arc<AppState>, id: String) {
         state.config.js_runtime.as_deref(),
         &job_dir,
         &job.url,
+        state.config.download_timeout,
         |line, progress| {
             update_job(&state, &id, |job| {
                 if let Some(progress) = progress {

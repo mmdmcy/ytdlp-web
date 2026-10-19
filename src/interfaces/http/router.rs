@@ -1,6 +1,7 @@
 use axum::{
     Router,
     extract::DefaultBodyLimit,
+    middleware::from_fn_with_state,
     routing::{get, post},
 };
 
@@ -45,6 +46,10 @@ pub(crate) fn build_router(state: Arc<AppState>) -> Router {
             get(super::downloads::download_file),
         )
         .layer(DefaultBodyLimit::max(1024 * 1024))
+        .layer(from_fn_with_state(
+            state.clone(),
+            crate::security::auth::login_throttle,
+        ))
         .with_state(state)
 }
 
@@ -74,11 +79,40 @@ mod tests {
                 js_runtime: None,
                 max_active: 1,
                 job_ttl: Duration::hours(1),
+                download_timeout: std::time::Duration::from_secs(60),
                 auth: crate::security::auth::test_auth_config(true),
             },
             jobs: Mutex::new(HashMap::new()),
             download_slots: Semaphore::new(1),
+            login_limiter: Default::default(),
         })
+    }
+
+    #[tokio::test]
+    async fn repeated_wrong_passwords_lock_the_address_out() {
+        let app = build_router(oidc_state());
+        let post = |password: &str| {
+            Request::post("/login")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("password={password}")))
+                .unwrap()
+        };
+        for _ in 0..5 {
+            let response = app.clone().oneshot(post("wrong")).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let locked = app.clone().oneshot(post("secret")).await.unwrap();
+        assert_eq!(locked.status(), StatusCode::TOO_MANY_REQUESTS);
+        let basic = app
+            .oneshot(
+                Request::get("/")
+                    .header(header::AUTHORIZATION, "Basic eXRkbHBfd2ViOnNlY3JldA==")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(basic.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]

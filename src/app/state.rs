@@ -3,13 +3,14 @@ use std::{collections::HashMap, sync::Mutex};
 use tokio::sync::Semaphore;
 
 use super::Config;
-use crate::features::downloader::Job;
+use crate::{features::downloader::Job, security::auth::LoginLimiter};
 
 pub(crate) struct AppState {
     pub(crate) db: Mutex<Connection>,
     pub(crate) config: Config,
     pub(crate) jobs: Mutex<HashMap<String, Job>>,
     pub(crate) download_slots: Semaphore,
+    pub(crate) login_limiter: LoginLimiter,
 }
 
 impl AppState {

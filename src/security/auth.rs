@@ -3,8 +3,9 @@ use argon2::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
 };
 use axum::{
-    extract::{Form, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    extract::{ConnectInfo, Form, Request, State},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+    middleware::Next,
     response::{IntoResponse, Redirect, Response},
 };
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
@@ -14,7 +15,13 @@ use rand::RngCore;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::{env, io, sync::Arc};
+use std::{
+    collections::HashMap,
+    env, io,
+    net::{IpAddr, Ipv6Addr, SocketAddr},
+    sync::{Arc, Mutex},
+    time::{Duration as StdDuration, Instant},
+};
 use subtle::ConstantTimeEq;
 
 use crate::{app::AppState, interfaces::http::presentation::page, security::oidc::OidcConfig};
@@ -23,6 +30,9 @@ const APP_NAME: &str = "YTDLP Web";
 const SESSION_COOKIE: &str = "ytdlp_web_session";
 const LOCAL_SESSION_DAYS: i64 = 30;
 const OIDC_SESSION_HOURS: i64 = 12;
+const LOGIN_FAILURE_LIMIT: usize = 5;
+const LOGIN_FAILURE_WINDOW: StdDuration = StdDuration::from_secs(10 * 60);
+const LOGIN_LIMITER_MAX_ENTRIES: usize = 4096;
 #[derive(Clone)]
 pub(crate) struct AuthConfig {
     user: String,
@@ -41,6 +51,13 @@ impl AuthConfig {
         let auth_disabled = env_flag("YTDLP_WEB_AUTH_DISABLED", false);
         let oidc = OidcConfig::from_env()?;
         validate_auth_policy(password_hash.as_deref(), auth_disabled, oidc.as_ref())?;
+        if let Some(oidc) = &oidc
+            && !oidc.restricts_identities()
+        {
+            eprintln!(
+                "warning: YTDLP_WEB_OIDC_ALLOWED_SUBJECTS and YTDLP_WEB_OIDC_ALLOWED_EMAILS are unset; every identity at the OIDC issuer can log in"
+            );
+        }
 
         let cookie_secure = oidc.as_ref().is_some_and(OidcConfig::uses_secure_cookie)
             || env_flag("YTDLP_WEB_COOKIE_SECURE", false);
@@ -94,7 +111,7 @@ fn validate_auth_policy(
 }
 
 pub(crate) async fn login_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if authorized(&state, &headers) {
+    if matches!(access(&state, &headers), Access::Granted) {
         return Redirect::to("/").into_response();
     }
     page("YTDLP Web Login", &login_body(&state.config.auth, None))
@@ -110,10 +127,10 @@ pub(crate) async fn login_post(
     Form(form): Form<LoginForm>,
 ) -> Response {
     if !verify_password(&state.config.auth, &form.password) {
-        return page(
+        return credential_rejected(page(
             "YTDLP Web Login",
             &login_body(&state.config.auth, Some("Wrong password.")),
-        );
+        ));
     }
     let cookie = {
         let db = state.db.lock().unwrap();
@@ -167,41 +184,148 @@ fn login_body(config: &AuthConfig, error: Option<&str>) -> String {
 }
 
 pub(crate) fn page_guard(state: &AppState, headers: &HeaderMap) -> Option<Response> {
-    if authorized(state, headers) {
-        None
-    } else {
-        Some(Redirect::to("/login").into_response())
+    match access(state, headers) {
+        Access::Granted => None,
+        Access::Anonymous => Some(Redirect::to("/login").into_response()),
+        Access::Rejected => Some(credential_rejected(Redirect::to("/login").into_response())),
     }
 }
 
 pub(crate) fn raw_guard(state: &AppState, headers: &HeaderMap) -> Option<Response> {
-    if authorized(state, headers) {
-        None
-    } else {
-        Some((StatusCode::UNAUTHORIZED, "authentication required").into_response())
+    match access(state, headers) {
+        Access::Granted => None,
+        Access::Anonymous => {
+            Some((StatusCode::UNAUTHORIZED, "authentication required").into_response())
+        }
+        Access::Rejected => Some(credential_rejected(
+            (StatusCode::UNAUTHORIZED, "authentication required").into_response(),
+        )),
     }
 }
 
-fn authorized(state: &AppState, headers: &HeaderMap) -> bool {
+enum Access {
+    Granted,
+    /// No credential was presented.
+    Anonymous,
+    /// A password or Basic credential was presented and failed.
+    Rejected,
+}
+
+fn access(state: &AppState, headers: &HeaderMap) -> Access {
     let config = &state.config.auth;
     if config.auth_disabled {
-        return true;
+        return Access::Granted;
     }
     if let Some(value) = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         && let Some(raw) = value.strip_prefix("Basic ")
-        && let Ok(decoded) = BASE64.decode(raw.trim())
-        && let Ok(pair) = String::from_utf8(decoded)
-        && let Some((user, password)) = pair.split_once(':')
     {
-        return user == config.user && verify_password(config, password);
+        let accepted = BASE64
+            .decode(raw.trim())
+            .ok()
+            .and_then(|decoded| String::from_utf8(decoded).ok())
+            .and_then(|pair| {
+                pair.split_once(':').map(|(user, password)| {
+                    user == config.user && verify_password(config, password)
+                })
+            })
+            .unwrap_or(false);
+        return if accepted {
+            Access::Granted
+        } else {
+            Access::Rejected
+        };
     }
     let Some(token) = session_cookie_value(headers) else {
-        return false;
+        return Access::Anonymous;
     };
     let db = state.db.lock().unwrap();
-    verify_session(&db, config, token, Utc::now().timestamp()).unwrap_or(false)
+    if verify_session(&db, config, token, Utc::now().timestamp()).unwrap_or(false) {
+        Access::Granted
+    } else {
+        Access::Anonymous
+    }
+}
+
+/// Response marker: a presented credential was rejected, so the throttle
+/// middleware counts a failure for the client address.
+#[derive(Clone, Copy)]
+struct CredentialRejected;
+
+fn credential_rejected(mut response: Response) -> Response {
+    response.extensions_mut().insert(CredentialRejected);
+    response
+}
+
+/// Per-address failed-login counter: after `LOGIN_FAILURE_LIMIT` rejected
+/// credentials within `LOGIN_FAILURE_WINDOW`, further attempts are refused
+/// until the oldest failure leaves the window.
+#[derive(Default)]
+pub(crate) struct LoginLimiter {
+    failures: Mutex<HashMap<IpAddr, Vec<Instant>>>,
+}
+
+impl LoginLimiter {
+    pub(crate) fn is_locked(&self, ip: IpAddr, now: Instant) -> bool {
+        let mut failures = self.failures.lock().unwrap();
+        let Some(entries) = failures.get_mut(&ip) else {
+            return false;
+        };
+        entries.retain(|at| now.duration_since(*at) < LOGIN_FAILURE_WINDOW);
+        if entries.is_empty() {
+            failures.remove(&ip);
+            return false;
+        }
+        entries.len() >= LOGIN_FAILURE_LIMIT
+    }
+
+    pub(crate) fn record_failure(&self, ip: IpAddr, now: Instant) {
+        let mut failures = self.failures.lock().unwrap();
+        if failures.len() >= LOGIN_LIMITER_MAX_ENTRIES {
+            failures.retain(|_, entries| {
+                entries
+                    .iter()
+                    .any(|at| now.duration_since(*at) < LOGIN_FAILURE_WINDOW)
+            });
+        }
+        let entries = failures.entry(ip).or_default();
+        entries.retain(|at| now.duration_since(*at) < LOGIN_FAILURE_WINDOW);
+        entries.push(now);
+    }
+}
+
+/// Middleware: refuses Basic and login-form attempts from a locked-out
+/// address before any password hashing, and records rejected credentials.
+pub(crate) async fn login_throttle(
+    State(state): State<Arc<AppState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let is_attempt = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .is_some_and(|value| value.as_bytes().starts_with(b"Basic "))
+        || (request.method() == Method::POST && request.uri().path() == "/login");
+    if !is_attempt {
+        return next.run(request).await;
+    }
+    let ip = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0.ip())
+        .unwrap_or(IpAddr::V6(Ipv6Addr::UNSPECIFIED));
+    if state.login_limiter.is_locked(ip, Instant::now()) {
+        return auth_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many failed logins from this address. Try again later.",
+        );
+    }
+    let response = next.run(request).await;
+    if response.extensions().get::<CredentialRejected>().is_some() {
+        state.login_limiter.record_failure(ip, Instant::now());
+    }
+    response
 }
 
 fn verify_password(config: &AuthConfig, password: &str) -> bool {
@@ -461,6 +585,27 @@ mod tests {
         let config = test_auth_config(false);
         assert!(verify_password(&config, "secret"));
         assert!(!verify_password(&config, "wrong"));
+    }
+
+    #[test]
+    fn login_limiter_locks_after_repeated_failures_and_recovers() {
+        let limiter = LoginLimiter::default();
+        let ip: IpAddr = "192.0.2.10".parse().unwrap();
+        let other: IpAddr = "192.0.2.11".parse().unwrap();
+        let start = Instant::now();
+        for i in 0..LOGIN_FAILURE_LIMIT - 1 {
+            limiter.record_failure(ip, start + StdDuration::from_secs(i as u64));
+        }
+        assert!(!limiter.is_locked(ip, start + StdDuration::from_secs(10)));
+        limiter.record_failure(ip, start + StdDuration::from_secs(10));
+        assert!(limiter.is_locked(ip, start + StdDuration::from_secs(11)));
+        assert!(!limiter.is_locked(other, start + StdDuration::from_secs(11)));
+        assert!(limiter.is_locked(ip, start + LOGIN_FAILURE_WINDOW - StdDuration::from_secs(1)));
+        // The oldest failures age out of the window and the address recovers.
+        assert!(!limiter.is_locked(
+            ip,
+            start + LOGIN_FAILURE_WINDOW + StdDuration::from_secs(11)
+        ));
     }
 
     #[test]

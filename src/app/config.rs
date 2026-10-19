@@ -1,5 +1,5 @@
 use chrono::Duration;
-use std::{env, io, path::PathBuf};
+use std::{env, io, path::PathBuf, time::Duration as StdDuration};
 
 use crate::security::auth::AuthConfig;
 
@@ -12,6 +12,8 @@ pub(crate) struct Config {
     pub(crate) js_runtime: Option<PathBuf>,
     pub(crate) max_active: usize,
     pub(crate) job_ttl: Duration,
+    /// Wall-clock limit for one yt-dlp run; the process is killed afterwards.
+    pub(crate) download_timeout: StdDuration,
     pub(crate) auth: AuthConfig,
 }
 
@@ -40,6 +42,11 @@ impl Config {
             .and_then(|value| value.parse::<i64>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(24);
+        let timeout_secs = env::var("YTDLP_WEB_DOWNLOAD_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(2 * 60 * 60);
         Ok(Self {
             bind,
             db_path,
@@ -48,6 +55,7 @@ impl Config {
             js_runtime,
             max_active,
             job_ttl: Duration::hours(ttl_hours),
+            download_timeout: StdDuration::from_secs(timeout_secs),
             auth: AuthConfig::from_env()?,
         })
     }
