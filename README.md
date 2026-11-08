@@ -148,6 +148,12 @@ sqlite3 -readonly data/ytdlp_web.sqlite ".backup /tmp/ytdlp-copy.sqlite"
 YTDLP_WEB_DB=data/ytdlp_web.sqlite ./ytdlp-web import-sqlite --from /tmp/ytdlp-copy.sqlite
 ```
 
+On a host where Plugroot runs it (`<state root>/releases/ytdlp-web/current`),
+`deploy/cutover-to-go.sh` does the whole move in one run: checks, the new
+password (asked twice, not shown), the import, a new release with `current`
+flipped, the start and the checks after it; `--dry-run` prints every command
+and runs none, and the last line is the exact rollback command.
+
 The Rust version is kept, buildable, in `archive/rust/`.
 
 ## Checks
