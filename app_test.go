@@ -32,6 +32,14 @@ func testAuthConfig(t *testing.T, oidcEnabled bool) *authConfig {
 	return config
 }
 
+// testOIDCOnly is OIDC with no local password.
+func testOIDCOnly(t *testing.T) *authConfig {
+	t.Helper()
+	config := testAuthConfig(t, true)
+	*config = authConfig{user: config.user, cookieSecret: config.cookieSecret, cookieSecure: true, oidc: config.oidc}
+	return config
+}
+
 func testOIDCConfig() *oidcConfig {
 	return &oidcConfig{issuer: "https://identity.example.test", clientID: "ytdlp_web", clientSecret: "placeholder",
 		redirectURL: "https://ytdlp-web.example.test/auth/oidc/callback"}

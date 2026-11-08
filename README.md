@@ -80,8 +80,10 @@ and pending OIDC flows on restart.
 
 YTDLP Web remains fully standalone. Managed login is an optional dogfood-alpha
 integration, not an enterprise-readiness or certification claim. To enable it,
-set all four values below and keep `YTDLP_WEB_PASSWORD_HASH` configured as an
-independent local break-glass path:
+set all four values below. With `YTDLP_WEB_PASSWORD_HASH` also set, the local
+password stays as an independent break-glass login; without it, only the
+OpenID Connect provider signs people in, and the password form and HTTP Basic
+credentials are refused:
 
 ```text
 YTDLP_WEB_OIDC_ISSUER=https://identity.example.invalid
@@ -117,7 +119,7 @@ unauthenticated status envelope at
 `/.well-known/linuxmice/component`. It contains no job URLs, filenames, media
 paths, database paths, credentials, identity endpoints, or user data. The
 application remains fully standalone. Its `identity_mode` is `disabled`,
-`local`, or `oidc+local` according to the active configuration.
+`local`, `oidc` or `oidc+local` according to the active configuration.
 The matching optional catalog declaration is `linuxmice-component.toml`;
 YTDLP Web does not require the LinuxMice hub or identity service to run.
 

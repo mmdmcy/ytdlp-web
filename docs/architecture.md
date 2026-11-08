@@ -22,7 +22,7 @@ each file owns one capability.
 | Durable storage | `store.go` | The checksummed JSON store: download cache, sessions, pending sign-ins. |
 | One-time import | `importer.go` | `import-sqlite` through the system's `sqlite3`. |
 | Identity | `auth.go`, `password.go`, `oidc.go` | Local authentication, sessions, the login throttle, OIDC sign-in. |
-| Status envelope and publication safety | `status.go`, `audit.go` | `/.well-known/linuxmice/component`, `audit-public`. |
+| Status envelope and publication safety | `status.go`, `audit.go` | The component status route (see README), `audit-public`. |
 
 ## Data Model
 

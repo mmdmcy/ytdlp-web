@@ -26,7 +26,7 @@ import (
 // so two processes never share a store. Jobs live in memory, as before;
 // the store keeps the download cache and the sign-in state.
 
-const storeFormat = "katteke.ytdlp-web.store.v1"
+const storeFormat = "ytdlp-web.store.v1"
 
 type cacheEntry struct {
 	CacheKey  string `json:"cache_key"`
