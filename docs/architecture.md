@@ -1,62 +1,49 @@
 # YTDLP Web Architecture
 
-YTDLP Web is a small authenticated download service. The module tree follows
-product capabilities and keeps delivery, policy, storage, and external process
-code separate.
+YTDLP Web is a small authenticated download service: one Go program in one
+package, built from the standard library only. `main.go` selects a CLI command;
+each file owns one capability.
 
 ## Runtime Shape
 
-- One Rust process serves Axum routes, keeps active jobs in memory, uses SQLite
-  for the completed-download cache, and launches `yt-dlp` without a shell.
-- `src/main.rs` only enters the CLI interface; `src/app/` owns configuration,
-  shared state, database opening, and server startup.
+- One Go process serves HTTP with `net/http`, keeps active jobs in memory,
+  keeps the completed-download cache and sign-in state in a standard-library
+  file store, and launches `yt-dlp` without a shell.
 
 ## Core Boundaries
 
-| Capability | Owner | Entry points and dependencies |
+| Capability | File | Entry points and dependencies |
 | --- | --- | --- |
-| Process startup and configuration | `src/app/` | Loads `YTDLP_WEB_*`, opens SQLite, assembles shared state, and starts Axum. Depends on persistence and HTTP routing. |
-| Download lifecycle | `src/features/downloader/` | Owns jobs, URL/cache identity, retention, and download-cache records. Depends on app state and SQLite. |
-| `yt-dlp` execution | `src/integrations/ytdlp.rs` | Owns subprocess arguments, output parsing, and downloaded-file discovery. Called by the download capability. |
-| HTTP delivery | `src/interfaces/http/` | Owns routes, request handlers, file responses, component status, and HTML presentation. Depends on app state, downloads, and security. |
-| CLI delivery | `src/interfaces/cli.rs` | Dispatches `serve`, `hash-password`, and `audit-public`. Depends on app startup and security commands. |
-| Identity and publication safety | `src/security/` | Owns local authentication, OIDC, sessions, and public-source auditing. Depends on app state and HTTP presentation. |
-| SQLite schema | `src/persistence/` | Supplies versioned migrations to the app-owned database opener. It does not own download behavior. |
-
-HTTP handlers call feature entry points; the downloader feature calls the
-`yt-dlp` integration and its own cache repository. Security guards delivery,
-while external processes never own routes or presentation.
+| Process startup and configuration | `main.go` | Loads `YTDLP_WEB_*`, opens the store, assembles routes and starts the server. |
+| Download lifecycle | `downloads.go` | Jobs, URL and cache identity, retention, cache records and the download handlers. Uses the store and `ytdlp.go`. |
+| `yt-dlp` execution | `ytdlp.go` | Subprocess arguments, output parsing, the time limit and downloaded-file discovery. |
+| HTTP delivery | `web.go` | Routing, responses, form and query parsing, answered as axum did. |
+| HTML presentation | `pages.go`, `page.css` | The download, job and login pages. |
+| Durable storage | `store.go` | The checksummed JSON store: download cache, sessions, pending sign-ins. |
+| One-time import | `importer.go` | `import-sqlite` through the system's `sqlite3`. |
+| Identity | `auth.go`, `password.go`, `oidc.go` | Local authentication, sessions, the login throttle, OIDC sign-in. |
+| Status envelope and publication safety | `status.go`, `audit.go` | `/.well-known/linuxmice/component`, `audit-public`. |
 
 ## Data Model
 
 - Active jobs and progress logs are process-local state.
-- Versioned migrations own the completed-download cache, app sessions, and
-  pending OIDC flows.
-- The ownership refactor does not change the SQLite schema or migration order.
+- `storeData` holds the completed-download cache, app sessions and pending
+  OIDC flows; `validate` enforces the SQL schema's keys and checks.
 
 ## Trust, Privacy, And Cost Boundaries
 
-- Authentication, OIDC validation, session hashing, and publication auditing
-  remain under `src/security/`.
-- File responses remain constrained to the configured canonical download root,
-  and submitted URLs remain restricted to supported YouTube hosts.
-- The configured semaphore limits concurrent subprocesses; retention policy
-  bounds completed jobs and cached files.
-
-## Extension Points
-
-- Add download rules and lifecycle behavior in `src/features/downloader/`.
-- Keep external command details in `src/integrations/ytdlp.rs`, SQL schema in
-  `src/persistence/`, and delivery behavior in `src/interfaces/`.
+- File responses stay inside the configured canonical download root (whole
+  path components), and submitted URLs stay restricted to YouTube hosts.
+- The download slots limit concurrent subprocesses; retention bounds completed
+  jobs and cached files.
 
 ## Verification
 
 ```bash
-cargo fmt --all --check
-cargo check --all-targets
-cargo clippy --all-targets -- -D warnings
-cargo test
-cargo run --quiet -- audit-public
-cargo katrust inspect
+gofmt -l .
+go vet ./...
+go test ./...
+go run . audit-public
+go list -m all
 git diff --check
 ```

@@ -1,4 +1,6 @@
 /target/
+/archive/rust/target/
+/ytdlp-web
 /.env
 /.env.*
 !/.env.example
