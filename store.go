@@ -92,6 +92,12 @@ func openStore(db string) (*store, error) {
 	}
 	data, err := s.load()
 	if errors.Is(err, os.ErrNotExist) {
+		// A Rust database beside a missing store means the import has not
+		// run: starting empty would forget the download cache.
+		if info, statErr := os.Stat(db); statErr == nil && db != path && info.Mode().IsRegular() {
+			s.close()
+			return nil, fmt.Errorf("the store %s is missing but %s is there: import it once with `ytdlp-web import-sqlite --from A_COPY_OF_IT` (see README)", path, db)
+		}
 		s.data = &storeData{}
 		if err := s.update(func(*storeData) error { return nil }); err != nil {
 			s.close()

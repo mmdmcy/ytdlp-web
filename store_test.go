@@ -77,6 +77,14 @@ func TestAFailedChangeLeavesNothingBehind(t *testing.T) {
 	}
 }
 
+func TestAnUnimportedRustDatabaseStopsTheStart(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "ytdlp_web.sqlite")
+	os.WriteFile(db, []byte("SQLite format 3\x00"), 0o600)
+	if _, err := openStore(db); err == nil || !strings.Contains(err.Error(), "import-sqlite") {
+		t.Fatal(err)
+	}
+}
+
 func TestImportFromASchema2Database(t *testing.T) {
 	if _, err := exec.LookPath("sqlite3"); err != nil {
 		t.Skip("sqlite3 is not installed")
